@@ -95,6 +95,7 @@ class IrModuleModule(models.Model):
                     'cloc',
                     '--exclude-dir=%s' % (exclude_dir),
                     '--skip-uniqueness',
+                    '--follow-links',
                     '--include-lang=%s' % (include_lang),
                     '--not-match-f="__openerp__.py|__manifest__.py"',
                     '--json',
