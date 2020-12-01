@@ -38,7 +38,11 @@
                         />
                         <field
                             name="upgrade_path"
-                            attrs="{'readonly': [('state', '=', 'done')], 'invisible': [('write_files', '=', False)]}"
+                            attrs="{'readonly': [('state', '=', 'done')]}"
+                        />
+                        <field
+                            name="without_apriori"
+                            attrs="{'readonly': [('state', '=', 'done')]}"
                         />
                         <field
                             name="analysis_date"

@@ -3,12 +3,15 @@
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 # flake8: noqa: C901
 
+import json
 import logging
 import os
 
 from odoo import fields, models
+from odoo.exceptions import UserError
 from odoo.modules import get_module_path
 from odoo.tools import config
+from odoo.tools.translate import _
 
 from .. import compare
 
@@ -16,11 +19,36 @@ _logger = logging.getLogger(__name__)
 _IGNORE_MODULES = ["openupgrade_records", "upgrade_analysis"]
 
 
+class Apriori(object):
+    def __init__(self, apriori_dict):
+        for key in [
+            "renamed_modules",
+            "merged_modules",
+            "renamed_models",
+            "merged_models",
+        ]:
+            try:
+                setattr(self, key, apriori_dict[key])
+            except KeyError:
+                raise UserError(
+                    _("Invalid contents of apriori.json: no key '%s'") % key
+                )
+
+
 class UpgradeAnalysis(models.Model):
     _name = "upgrade.analysis"
     _description = "Upgrade Analyses"
 
     analysis_date = fields.Datetime(readonly=True)
+    without_apriori = fields.Boolean(
+        default=False,
+        help=(
+            "A file apriori.json encodes known renames of modules and models. "
+            "This process expects to find it in the upgrade path. Tick this box if you "
+            "Tick this box if you do not provide such a file, or if you do not wish to "
+            "use it."
+        ),
+    )
 
     state = fields.Selection(
         [("draft", "draft"), ("done", "Done")], readonly=True, default="draft"
@@ -35,7 +63,12 @@ class UpgradeAnalysis(models.Model):
     log = fields.Text(readonly=True)
     upgrade_path = fields.Char(
         default=config.get("upgrade_path", False),
-        help="The base file path to save the analyse files of Odoo modules",
+        help=(
+            "The base file path to save the analyse files of Odoo modules. "
+            "Default is taken from Odoo's --upgrade-path command line option. "
+            "At this location, an apriori.json file must exist."
+        ),
+        required=True,
     )
 
     write_files = fields.Boolean(
@@ -56,11 +89,6 @@ class UpgradeAnalysis(models.Model):
     ):
         module = self.env["ir.module.module"].search([("name", "=", module_name)])[0]
         if module.is_odoo_module:
-            if not self.upgrade_path:
-                return (
-                    "ERROR: no upgrade_path set when writing analysis of %s\n"
-                    % module_name
-                )
             module_path = os.path.join(self.upgrade_path, module_name)
         else:
             module_path = get_module_path(module_name)
@@ -97,6 +125,26 @@ class UpgradeAnalysis(models.Model):
             }
         )
 
+        if not self.upgrade_path:
+            return (
+                "ERROR: no upgrade_path set when writing analysis of %s\n" % module_name
+            )
+
+        if not self.without_apriori:
+            apriori_path = os.path.join(self.upgrade_path, "apriori.json")
+            try:
+                with open(apriori_path) as json_file:
+                    apriori_dict = json.load(json_file)
+            except FileNotFoundError:
+                raise UserError(
+                    _("Could not import apriori.json: file %s not found") % apriori_path
+                )
+            except ValueError:
+                raise UserError(_("The contents of apriori.json is not valid json"))
+            apriori = Apriori(apriori_dict)
+        else:
+            apriori = None
+
         connection = self.config_id.get_connection()
         RemoteRecord = self._get_remote_model(connection, "record")
         LocalRecord = self.env["upgrade.record"]
@@ -104,7 +152,7 @@ class UpgradeAnalysis(models.Model):
         # Retrieve field representations and compare
         remote_records = RemoteRecord.field_dump()
         local_records = LocalRecord.field_dump()
-        res = compare.compare_sets(remote_records, local_records)
+        res = compare.compare_sets(remote_records, local_records, apriori)
 
         # Retrieve xml id representations and compare
         flds = [
@@ -125,7 +173,9 @@ class UpgradeAnalysis(models.Model):
             {field: record[field] for field in flds}
             for record in RemoteRecord.read(remote_xml_record_ids, flds)
         ]
-        res_xml = compare.compare_xml_sets(remote_xml_records, local_xml_records)
+        res_xml = compare.compare_xml_sets(
+            remote_xml_records, local_xml_records, apriori
+        )
 
         # Retrieve model representations and compare
         flds = [
@@ -145,7 +195,7 @@ class UpgradeAnalysis(models.Model):
             for record in RemoteRecord.read(remote_model_record_ids, flds)
         ]
         res_model = compare.compare_model_sets(
-            remote_model_records, local_model_records
+            remote_model_records, local_model_records, apriori
         )
 
         affected_modules = sorted(
@@ -195,7 +245,7 @@ class UpgradeAnalysis(models.Model):
             if key == "general":
                 general_log += contents
                 continue
-            if compare.module_map(key) not in modules:
+            if compare.module_map(key, apriori) not in modules:
                 general_log += (
                     "ERROR: module not in list of installed modules:\n" + contents
                 )

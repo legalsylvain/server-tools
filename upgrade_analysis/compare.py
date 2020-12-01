@@ -11,24 +11,30 @@
 import collections
 import copy
 
-from . import apriori
 
-
-def module_map(module):
+def module_map(module, apriori):
+    if not apriori:
+        return module
     return apriori.renamed_modules.get(
         module, apriori.merged_modules.get(module, module)
     )
 
 
-def model_rename_map(model):
+def model_rename_map(model, apriori):
+    if not apriori:
+        return model
     return apriori.renamed_models.get(model, model)
 
 
-def model_map(model):
+def model_map(model, apriori):
+    if not apriori:
+        return model
     return apriori.renamed_models.get(model, apriori.merged_models.get(model, model))
 
 
-def inv_model_map(model):
+def inv_model_map(model, apriori):
+    if not apriori:
+        return model
     inv_model_map_dict = {v: k for k, v in apriori.renamed_models.items()}
     return inv_model_map_dict.get(model, model)
 
@@ -42,20 +48,21 @@ IGNORE_FIELDS = [
 ]
 
 
-def compare_records(dict_old, dict_new, fields):
+def compare_records(dict_old, dict_new, fields, apriori):
     """
     Check equivalence of two OpenUpgrade field representations
     with respect to the keys in the 'fields' arguments.
     Take apriori knowledge into account for mapped modules or
     model names.
+
     Return True of False.
     """
     for field in fields:
         if field == "module":
-            if module_map(dict_old["module"]) != dict_new["module"]:
+            if module_map(dict_old["module"], apriori) != dict_new["module"]:
                 return False
         elif field == "model":
-            if model_rename_map(dict_old["model"]) != dict_new["model"]:
+            if model_rename_map(dict_old["model"], apriori) != dict_new["model"]:
                 return False
         elif field == "other_prefix":
             if (
@@ -71,14 +78,14 @@ def compare_records(dict_old, dict_new, fields):
     return True
 
 
-def search(item, item_list, fields):
+def search(item, item_list, fields, apriori):
     """
     Find a match of a dictionary in a list of similar dictionaries
     with respect to the keys in the 'fields' arguments.
     Return the item if found or None.
     """
     for other in item_list:
-        if not compare_records(item, other, fields):
+        if not compare_records(item, other, fields, apriori):
             continue
         return other
     # search for renamed fields
@@ -86,68 +93,72 @@ def search(item, item_list, fields):
         for other in item_list:
             if not item["field"] or item["field"] is not None or item["isproperty"]:
                 continue
-            if compare_records(dict(item, field=other["field"]), other, fields):
+            if compare_records(
+                dict(item, field=other["field"]), other, fields, apriori
+            ):
                 return other
     return None
 
 
-def fieldprint(old, new, field, text, reprs):
+def fieldprint(old, new, field, text, reprs, apriori):
     fieldrepr = "{} ({})".format(old["field"], old["type"])
     fullrepr = "{:<12} / {:<24} / {:<30}".format(old["module"], old["model"], fieldrepr)
     if not text:
         text = "{} is now '{}' ('{}')".format(field, new[field], old[field])
         if field == "relation":
             text += " [nothing to do]"
-    reprs[module_map(old["module"])].append("{}: {}".format(fullrepr, text))
+    reprs[module_map(old["module"], apriori)].append("{}: {}".format(fullrepr, text))
     if field == "module":
         text = "previously in module %s" % old[field]
         fullrepr = "{:<12} / {:<24} / {:<30}".format(
             new["module"], old["model"], fieldrepr
         )
-        reprs[module_map(new["module"])].append("{}: {}".format(fullrepr, text))
+        reprs[module_map(new["module"], apriori)].append(
+            "{}: {}".format(fullrepr, text)
+        )
 
 
-def report_generic(new, old, attrs, reprs):
+def report_generic(new, old, attrs, reprs, apriori):
     for attr in attrs:
         if attr == "required":
             if old[attr] != new["required"] and new["required"]:
                 text = "now required"
                 if new["req_default"]:
                     text += ", req_default: %s" % new["req_default"]
-                fieldprint(old, new, "", text, reprs)
+                fieldprint(old, new, "", text, reprs, apriori)
         elif attr == "stored":
             if old[attr] != new[attr]:
                 if new["stored"]:
                     text = "is now stored"
                 else:
                     text = "not stored anymore"
-                fieldprint(old, new, "", text, reprs)
+                fieldprint(old, new, "", text, reprs, apriori)
         elif attr == "isfunction":
             if old[attr] != new[attr]:
                 if new["isfunction"]:
                     text = "now a function"
                 else:
                     text = "not a function anymore"
-                fieldprint(old, new, "", text, reprs)
+                fieldprint(old, new, "", text, reprs, apriori)
         elif attr == "isproperty":
             if old[attr] != new[attr]:
                 if new[attr]:
                     text = "now a property"
                 else:
                     text = "not a property anymore"
-                fieldprint(old, new, "", text, reprs)
+                fieldprint(old, new, "", text, reprs, apriori)
         elif attr == "isrelated":
             if old[attr] != new[attr]:
                 if new[attr]:
                     text = "now related"
                 else:
                     text = "not related anymore"
-                fieldprint(old, new, "", text, reprs)
+                fieldprint(old, new, "", text, reprs, apriori)
         elif old[attr] != new[attr]:
-            fieldprint(old, new, attr, "", reprs)
+            fieldprint(old, new, attr, "", reprs, apriori)
 
 
-def compare_sets(old_records, new_records):
+def compare_sets(old_records, new_records, apriori):
     """
     Compare a set of OpenUpgrade field representations.
     Try to match the equivalent fields in both sets.
@@ -179,7 +190,7 @@ def compare_sets(old_records, new_records):
     obsolete_models = []
     for model in old_models:
         if model not in new_models:
-            if model_map(model) not in new_models:
+            if model_map(model, apriori) not in new_models:
                 obsolete_models.append(model)
 
     non_obsolete_old_records = []
@@ -192,12 +203,12 @@ def compare_sets(old_records, new_records):
     def match(match_fields, report_fields, warn=False):
         count = 0
         for column in copy.copy(non_obsolete_old_records):
-            found = search(column, new_records, match_fields)
+            found = search(column, new_records, match_fields, apriori)
             if found:
                 if warn:
                     pass
                     # print "Tentatively"
-                report_generic(found, column, report_fields, reprs)
+                report_generic(found, column, report_fields, reprs, apriori)
                 old_records.remove(column)
                 non_obsolete_old_records.remove(column)
                 new_records.remove(found)
@@ -275,7 +286,7 @@ def compare_sets(old_records, new_records):
         )
         if extra_message:
             extra_message = " " + extra_message
-        fieldprint(column, "", "", "DEL" + extra_message, reprs)
+        fieldprint(column, "", "", "DEL" + extra_message, reprs, apriori)
 
     printkeys.extend(
         [
@@ -300,7 +311,7 @@ def compare_sets(old_records, new_records):
         )
         if extra_message:
             extra_message = " " + extra_message
-        fieldprint(column, "", "", "NEW" + extra_message, reprs)
+        fieldprint(column, "", "", "NEW" + extra_message, reprs, apriori)
 
     for line in [
         "# %d fields matched," % (origlen - len(old_records)),
@@ -315,13 +326,13 @@ def compare_sets(old_records, new_records):
     return reprs
 
 
-def compare_xml_sets(old_records, new_records):
+def compare_xml_sets(old_records, new_records, apriori):
     reprs = collections.defaultdict(list)
 
     def match(match_fields, match_type="direct"):
         matched_records = []
         for column in copy.copy(old_records):
-            found = search(column, new_records, match_fields)
+            found = search(column, new_records, match_fields, apriori)
             if found:
                 old_records.remove(column)
                 new_records.remove(found)
@@ -391,11 +402,11 @@ def compare_xml_sets(old_records, new_records):
             content += " (noupdate)"
         if entry["noupdate_switched"]:
             content += " (noupdate switched)"
-        reprs[module_map(entry["module"])].append(content)
+        reprs[module_map(entry["module"], apriori)].append(content)
     return reprs
 
 
-def compare_model_sets(old_records, new_records):
+def compare_model_sets(old_records, new_records, apriori):
     """
     Compare a set of OpenUpgrade model representations.
     """
@@ -409,38 +420,47 @@ def compare_model_sets(old_records, new_records):
         model = column["model"]
         if model in old_models:
             if model not in new_models:
-                if model_map(model) not in new_models:
+                if model_map(model, apriori) not in new_models:
                     obsolete_models.append(model)
                     text = "obsolete model %s" % model
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
-                    reprs[module_map(column["module"])].append(text)
+                    reprs[module_map(column["module"], apriori)].append(text)
                     reprs["general"].append(
                         "obsolete model %s [module %s]"
-                        % (model, module_map(column["module"]))
+                        % (model, module_map(column["module"], apriori))
                     )
                 else:
                     moved_module = ""
-                    if module_map(column["module"]) != new_models[model_map(model)]:
-                        moved_module = " in module %s" % new_models[model_map(model)]
+                    if (
+                        module_map(column["module"], apriori)
+                        != new_models[model_map(model, apriori)]
+                    ):
+                        moved_module = (
+                            " in module %s" % new_models[model_map(model, apriori)]
+                        )
                     text = "obsolete model {} (renamed to {}{})".format(
                         model,
-                        model_map(model),
+                        model_map(model, apriori),
                         moved_module,
                     )
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
-                    reprs[module_map(column["module"])].append(text)
+                    reprs[module_map(column["module"], apriori)].append(text)
                     reprs["general"].append(
                         "obsolete model %s (renamed to %s) [module %s]"
-                        % (model, model_map(model), module_map(column["module"]))
+                        % (
+                            model,
+                            model_map(model, apriori),
+                            module_map(column["module"], apriori),
+                        )
                     )
             else:
-                if module_map(column["module"]) != new_models[model]:
+                if module_map(column["module"], apriori) != new_models[model]:
                     text = "model {} (moved to {})".format(model, new_models[model])
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
-                    reprs[module_map(column["module"])].append(text)
+                    reprs[module_map(column["module"], apriori)].append(text)
                     text = "model {} (moved from {})".format(model, old_models[model])
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
@@ -449,7 +469,7 @@ def compare_model_sets(old_records, new_records):
         model = column["model"]
         if model in new_models:
             if model not in old_models:
-                if inv_model_map(model) not in old_models:
+                if inv_model_map(model, apriori) not in old_models:
                     text = "new model %s" % model
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
@@ -459,13 +479,15 @@ def compare_model_sets(old_records, new_records):
                     )
                 else:
                     moved_module = ""
-                    if column["module"] != module_map(old_models[inv_model_map(model)]):
+                    if column["module"] != module_map(
+                        old_models[inv_model_map(model, apriori)]
+                    ):
                         moved_module = (
-                            " in module %s" % old_models[inv_model_map(model)]
+                            " in module %s" % old_models[inv_model_map(model, apriori)]
                         )
                     text = "new model {} (renamed from {}{})".format(
                         model,
-                        inv_model_map(model),
+                        inv_model_map(model, apriori),
                         moved_module,
                     )
                     if column["model_type"]:
@@ -473,10 +495,10 @@ def compare_model_sets(old_records, new_records):
                     reprs[column["module"]].append(text)
                     reprs["general"].append(
                         "new model %s (renamed from %s) [module %s]"
-                        % (model, inv_model_map(model), column["module"])
+                        % (model, inv_model_map(model, apriori), column["module"])
                     )
             else:
-                if column["module"] != module_map(old_models[model]):
+                if column["module"] != module_map(old_models[model], apriori):
                     text = "model {} (moved from {})".format(model, old_models[model])
                     if column["model_type"]:
                         text += " [%s]" % column["model_type"]
