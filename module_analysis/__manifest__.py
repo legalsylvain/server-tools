@@ -12,7 +12,7 @@
     'version': '12.0.1.0.2',
     'license': 'AGPL-3',
     'depends': [
-        'base',
+        'base_automation',
     ],
     'data': [
         'security/ir.model.access.csv',
@@ -22,6 +22,7 @@
         'views/view_ir_module_type.xml',
         'views/view_ir_module_type_rule.xml',
         'views/view_ir_module_module.xml',
+        'data/ir_cron.xml',
         'data/ir_config_parameter.xml',
         'data/ir_module_type.xml',
         'data/ir_module_type_rule.xml',
